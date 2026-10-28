@@ -1,12 +1,5 @@
 [
   {
-    "id": "birl",
-    "title": "Birl! É Treze!",
-    "phrase": "Biiiiirl! Não vai dá não! Que não vai dá o que, rapaz! Sai de casa, comi pra caralho!",
-    "file": "birl.wav",
-    "duration": 0.87
-  },
-  {
     "id": "ta_saindo_da_jaula",
     "title": "Tá Saindo da Jaula o Monstro",
     "phrase": "Tá saindo da jaula o monstro, porra!",
@@ -26,33 +19,5 @@
     "phrase": "Meu nome agora é Zé Pequeno, porra!",
     "file": "ze_pequeno.wav",
     "duration": 3.16
-  },
-  {
-    "id": "ola_marilene",
-    "title": "Olá Marilene",
-    "phrase": "Olá Marilene, a noite é uma criança!",
-    "file": "ola_marilene.wav",
-    "duration": 10.89
-  },
-  {
-    "id": "ja_acabou_jessica",
-    "title": "Já Acabou, Jéssica?",
-    "phrase": "Já acabou, Jéssica?",
-    "file": "ja_acabou_jessica.wav",
-    "duration": 1.31
-  },
-  {
-    "id": "receba",
-    "title": "Luva de Pedreiro - Receba!",
-    "phrase": "Receba! Graças a Deus, pai! O melhor do mundo!",
-    "file": "receba.wav",
-    "duration": 0.79
-  },
-  {
-    "id": "calma_calabreso",
-    "title": "Calma, Calabreso!",
-    "phrase": "Calma, calabreso! Relaxa!",
-    "file": "calma_calabreso.wav",
-    "duration": 12.12
   }
 ]

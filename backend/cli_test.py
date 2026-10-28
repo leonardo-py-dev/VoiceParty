@@ -27,17 +27,14 @@ def main():
     parser = argparse.ArgumentParser(description="VoiceParty - CLI de Testes de IA e Rede Neural")
     subparsers = parser.add_subparsers(dest="command")
 
-    # Comando: compare
     compare_parser = subparsers.add_parser("compare", help="Compara dois arquivos de áudio")
     compare_parser.add_argument("ref", help="Caminho do áudio original de referência")
     compare_parser.add_argument("user", help="Caminho da tentativa gravada pelo usuário")
     compare_parser.add_argument("--ref-text", help="Texto do áudio original (opcional)", default=None)
     compare_parser.add_argument("--user-text", help="Texto dito pelo usuário (opcional)", default=None)
 
-    # Comando: test-demo
-    subparsers.add_parser("test-demo", help="Executa testes automáticos comparando o meme 'birl' com boa e má imitação")
+    subparsers.add_parser("test-demo", help="Executa testes automáticos comparando 'ta_saindo_da_jaula' com boa e má imitação")
 
-    # Comando: train
     train_parser = subparsers.add_parser("train", help="Treina a Rede Neural Siamesa")
     train_parser.add_argument("--epochs", type=int, default=10, help="Número de épocas de treino (padrão: 10)")
 
@@ -50,7 +47,7 @@ def main():
 
     elif args.command == "test-demo":
         clips_dir = os.path.join(os.path.dirname(__file__), "data", "clips")
-        ref_path = os.path.join(clips_dir, "birl.wav")
+        ref_path = os.path.join(clips_dir, "ta_saindo_da_jaula.wav")
         good_path = os.path.join(clips_dir, "test_attempt_good.wav")
         bad_path = os.path.join(clips_dir, "test_attempt_bad.wav")
 
@@ -59,7 +56,7 @@ def main():
             return
 
         scorer = VoiceScorer()
-        print("\n🧪 1. TESTANDO IMITAÇÃO BOA (Mesma entonação e ritmo próximo de 'birl.wav'):")
+        print("\n🧪 1. TESTANDO IMITAÇÃO BOA (Mesma entonação e ritmo próximo de 'ta_saindo_da_jaula.wav'):")
         res_good = scorer.evaluate_imitation(ref_path, good_path)
         print_result_card(res_good, "TESTE: BOA IMITAÇÃO")
 
@@ -69,7 +66,10 @@ def main():
 
     elif args.command == "train":
         clips_dir = os.path.join(os.path.dirname(__file__), "data", "clips")
-        audio_files = glob.glob(os.path.join(clips_dir, "*.wav")) + glob.glob(os.path.join(clips_dir, "*.mp3"))
+        audio_files = [
+            f for f in (glob.glob(os.path.join(clips_dir, "*.wav")) + glob.glob(os.path.join(clips_dir, "*.mp3")))
+            if not os.path.basename(f).startswith("test_attempt")
+        ]
         train_siamese_network(audio_files, epochs=args.epochs)
 
     else:

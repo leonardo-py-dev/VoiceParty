@@ -28,27 +28,43 @@ class VoiceScorer:
         """
         Executa a avaliação completa comparando o áudio original com a tentativa do usuário.
         """
+        # Obtém os atributos acústicos e neurais com cache em memória RAM
+        ref_feat = self.processor.get_features(ref_audio_path)
+        user_feat = self.processor.get_features(user_audio_path)
+
         # 1. Similaridade da Rede Neural Siamesa (CRNN)
-        s_neural = self.processor.compute_neural_similarity(ref_audio_path, user_audio_path)
+        s_neural = self.processor.compute_neural_similarity(ref_feat, user_feat)
 
-        # 2. Similaridade de Contorno Melódico / Pitch (DTW)
-        s_pitch = self.processor.compute_pitch_contour_similarity(ref_audio_path, user_audio_path)
+        # 2. Similaridade de Contorno Melódico / Pitch (DTW real em voiced frames)
+        s_pitch = self.processor.compute_pitch_contour_similarity(ref_feat, user_feat)
 
-        # 3. Similaridade de Ritmo / Cadência (RMS Envelope)
-        s_rhythm = self.processor.compute_rhythm_similarity(ref_audio_path, user_audio_path)
+        # 3. Similaridade de Ritmo / Cadência (RMS Envelope sem viés de silêncio)
+        s_rhythm = self.processor.compute_rhythm_similarity(ref_feat, user_feat)
 
         # 4. Similaridade de Palavras (se fornecidas transcrições/legendas)
         s_words = None
         if target_text and user_text:
             s_words = round(float(fuzz.token_sort_ratio(target_text.lower(), user_text.lower())), 2)
 
-        # Cálculo da Nota Ponderada Final
-        if s_words is not None:
-            # 40% Rede Siamesa, 30% Pitch, 15% Ritmo, 15% Palavras
-            total = (0.40 * s_neural) + (0.30 * s_pitch) + (0.15 * s_rhythm) + (0.15 * s_words)
+        # Portão de Coerência Acústica (Veto para áudios com entonação e ritmo díspares)
+        # Se os atributos acústicos indicarem áudios díspares (pitch < 32 e ritmo < 32, ou soma acústica < 55),
+        # atenua o score final proporcionalmente pela coerência acústica:
+        # coherence = min(1.0, max(0.1, (s_pitch + s_rhythm) / 60.0))
+        # Isso impede que correlações de ruído ou falsos positivos no embedding inflem notas de memes completamente distintos.
+        if (s_pitch < 32.0 and s_rhythm < 32.0) or (s_pitch + s_rhythm < 55.0):
+            coherence = min(1.0, max(0.1, (s_pitch + s_rhythm) / 60.0))
+            coherence_factor = coherence ** 2
+            s_neural_effective = s_neural * coherence_factor
+            if s_words is not None:
+                raw_total = (0.40 * s_neural_effective) + (0.30 * s_pitch) + (0.15 * s_rhythm) + (0.15 * s_words)
+            else:
+                raw_total = (0.50 * s_neural_effective) + (0.35 * s_pitch) + (0.15 * s_rhythm)
+            total = raw_total * coherence_factor
         else:
-            # Sem texto: 50% Rede Siamesa, 35% Pitch, 15% Ritmo
-            total = (0.50 * s_neural) + (0.35 * s_pitch) + (0.15 * s_rhythm)
+            if s_words is not None:
+                total = (0.40 * s_neural) + (0.30 * s_pitch) + (0.15 * s_rhythm) + (0.15 * s_words)
+            else:
+                total = (0.50 * s_neural) + (0.35 * s_pitch) + (0.15 * s_rhythm)
 
         total = round(float(total), 1)
 

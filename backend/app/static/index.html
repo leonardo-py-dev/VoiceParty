@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceParty — IA & Redes Neurais de Voz</title>
+<style>
+:root{--bg:#0b1020;--card:#141b34;--card2:#0f1530;--line:#243056;--txt:#e8ecff;--mut:#8f9bc7;--acc:#7c5cff;--ok:#38d996;--warn:#ffb84d;--bad:#ff5c7a;--cyan:#38bdf8}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap;background:#0d1328}
+h1{margin:0;font-size:22px}h1 span{color:var(--acc)}
+nav{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+nav button{background:var(--card);color:var(--mut);border:1px solid var(--line);padding:9px 16px;border-radius:999px;cursor:pointer;font-weight:700;transition:.15s}
+nav button.on{background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 0 16px rgba(124,92,255,.4)}
+main{max-width:1060px;margin:0 auto;padding:20px;display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.card h2{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px}
+.mut{color:var(--mut);font-size:13px;line-height:1.45}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}@media(max-width:760px){.grid3{grid-template-columns:1fr}}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:760px){.two{grid-template-columns:1fr}}
+.clip{background:var(--card2);border:2px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;transition:.15s}
+.clip:hover{border-color:var(--acc)}.clip.sel{border-color:var(--acc);background:#1a2150;box-shadow:0 0 14px rgba(124,92,255,.25)}
+.clip b{display:block;font-size:15px;margin-bottom:4px}
+button.btn{background:var(--acc);color:#fff;border:0;padding:10px 18px;border-radius:10px;font-weight:700;cursor:pointer;transition:.15s}
+button.btn.sec{background:#222c55}button.btn.rec{background:var(--bad)}button.btn.ok{background:#12805c}
+button.btn:disabled{opacity:.42;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=file],select{background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+canvas{width:100%;background:var(--card2);border-radius:10px;display:block}
+.score{font-size:62px;font-weight:800;line-height:1}.rank{font-size:38px;font-weight:800;padding:6px 18px;border-radius:12px;background:var(--card2)}
+.bars{display:grid;gap:8px}.bar{display:grid;grid-template-columns:110px 1fr 44px;gap:8px;align-items:center;font-size:13px}
+.bar i{display:block;height:10px;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--ok));width:0;transition:width .7s}
+.bar div{background:var(--card2);border-radius:6px;overflow:hidden}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}@media(max-width:700px){.steps{grid-template-columns:1fr 1fr}}
+.step{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;font-size:12px;color:var(--mut);transition:.25s}
+.step.on{border-color:var(--ok);color:var(--txt);background:#123022}.step.act{border-color:var(--warn);color:var(--warn);background:#2b2212}
+.pbar{height:10px;background:var(--card2);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
+.pbar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--acc),var(--cyan),var(--ok));transition:width .2s}
+.logbox{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:135px;overflow-y:auto;color:#b8c4f0}
+.kpi{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center}
+.kpi b{font-size:20px;display:block;color:var(--ok)}
+.hide{display:none!important}.err{color:var(--bad)}
+.tag{font-size:12px;padding:3px 10px;border-radius:999px;background:#222c55;color:var(--mut)}
+.highlight-box{border:2px solid var(--ok);box-shadow:0 0 22px rgba(56,217,150,.15)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎤 Voice<span>Party</span></h1>
+  <span class="tag">PyTorch CRNN Siamesa · MFCCs & Log-Mel · Pitch DTW</span>
+  <nav>
+    <button id="tab-game" class="on" onclick="showTab('game')">🎬 Os 3 Memes (Desafios)</button>
+    <button id="tab-play" onclick="showTab('play')">🧪 Áudio Personalizado (Treino em Tempo Real)</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ==================== MODO 1: OS 3 MEMES DO CATÁLOGO ==================== -->
+  <div id="view-game" style="display:grid;gap:16px">
+    <section class="card">
+      <h2>1. Escolha um dos 3 Memes Clássicos</h2>
+      <p class="mut" style="margin-top:0">Selecione o meme abaixo, escute o áudio original de referência e prepare sua voz.</p>
+      <div id="game-clips" class="grid3"></div>
+      <div class="row" style="margin-top:12px">
+        <audio id="ref-audio" controls class="hide"></audio>
+        <span class="mut" id="ref-phrase" style="font-style:italic"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2. Grave ou Envie sua Imitação</h2>
+      <div class="row">
+        <button class="btn rec" id="btn-rec-game" onclick="toggleRec('game')">🔴 Gravar pelo Microfone</button>
+        <span class="mut">ou envie um arquivo:</span>
+        <input type="file" id="user-file-game" accept="audio/*">
+        <span id="rec-time-game" class="mut"></span>
+      </div>
+      <canvas id="live-game" height="56" style="margin-top:10px"></canvas>
+      <div class="row" style="margin-top:10px">
+        <audio id="user-audio-game" controls class="hide"></audio>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="btn-go-game" onclick="compareGame()" disabled>⚡ Comparar com a Rede Neural</button>
+        <span id="status-game" class="mut"></span>
+      </div>
+    </section>
+  </div>
+
+  <!-- ==================== MODO 2: ÁUDIO PERSONALIZADO (TREINO EM TEMPO REAL + REPLICAÇÃO) ==================== -->
+  <div id="view-play" class="hide" style="display:grid;gap:16px">
+    <!-- ETAPA A: Fornecer o áudio escolhido -->
+    <section class="card">
+      <h2>Etapa 1 · Forneça um Áudio de sua Escolha para Ensinar à IA</h2>
+      <p class="mut" style="margin-top:0">
+        Escolha qualquer arquivo de áudio do seu computador <b>ou grave uma fala sua agora mesmo</b>. Em seguida, assista em tempo real ao processamento no Librosa (MFCCs, Log-Mel e Pitch) e ao treinamento supervisionado da Rede Neural!
+      </p>
+      <div class="row" style="margin-bottom:10px">
+        <input type="text" id="custom-title" placeholder="Título do áudio (ex: Minha Frase)" value="Meu Áudio Personalizado" style="min-width:220px">
+        <input type="text" id="custom-phrase" placeholder="Frase falada no áudio (opcional)" style="flex:1;min-width:220px">
+        <label class="mut">Épocas:
+          <select id="custom-epochs">
+            <option value="8">8 épocas (Rápido)</option>
+            <option value="10" selected>10 épocas (Recomendado)</option>
+            <option value="14">14 épocas (Profundo)</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <input type="file" id="custom-ref-file" accept="audio/*">
+        <span class="mut">ou grave a referência:</span>
+        <button class="btn sec" id="btn-rec-ref" onclick="toggleRec('ref')">🎙️ Gravar Áudio Base</button>
+        <span id="rec-time-ref" class="mut"></span>
+      </div>
+      <canvas id="live-ref" height="50" style="margin-top:10px"></canvas>
+      <div class="row" style="margin-top:10px">
+        <audio id="custom-ref-preview" controls class="hide"></audio>
+        <span class="mut" id="custom-ref-name"></span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="btn-train-live" onclick="startLiveTraining()" disabled>🚀 Processar e Treinar Rede Neural em Tempo Real</button>
+        <span id="train-status" class="mut"></span>
+      </div>
+    </section>
+
+    <!-- ETAPA B: Painel de Processamento e Treinamento em Tempo Real -->
+    <section class="card hide" id="train-monitor" style="display:grid;gap:14px">
+      <h2>Etapa 2 · Acompanhamento em Tempo Real: Processamento Acústico & Treinamento da IA</h2>
+      <div class="steps">
+        <div class="step" id="st-prep">1. Librosa 16kHz<br>& Remoção de Silêncio</div>
+        <div class="step" id="st-feat">2. Extração de MFCCs,<br>Log-Mel & Pitch F0</div>
+        <div class="step" id="st-data">3. Split Supervisionado<br>Treino (67%) / Teste (33%)</div>
+        <div class="step" id="st-train">4. Treinamento PyTorch<br>Triplet Margin Loss</div>
+      </div>
+
+      <div class="pbar"><i id="train-bar"></i></div>
+
+      <div class="grid3">
+        <div class="kpi"><span class="mut">Época Atual</span><b id="kpi-epoch">0 / 10</b></div>
+        <div class="kpi"><span class="mut">Loss (Erro Triplet)</span><b id="kpi-loss">-</b></div>
+        <div class="kpi"><span class="mut">Acurácia (Treino / Teste)</span><b id="kpi-acc">-</b></div>
+      </div>
+
+      <div class="two">
+        <div>
+          <div class="mut" style="margin-bottom:4px"><b>MFCCs Extraídos (13 Coeficientes Cepstrais de Mel)</b> — Representação do timbre vocal</div>
+          <canvas id="tr-mfcc" height="125"></canvas>
+        </div>
+        <div>
+          <div class="mut" style="margin-bottom:4px"><b>Espectrograma Log-Mel (64 bandas)</b> — Entrada 2D da Rede Convolucional</div>
+          <canvas id="tr-spec" height="125"></canvas>
+        </div>
+      </div>
+
+      <div class="two">
+        <div>
+          <div class="mut" style="margin-bottom:4px"><b>Curva de Aprendizado ao Vivo: Queda da Loss e Subida da Acurácia (%)</b></div>
+          <canvas id="tr-chart" height="165"></canvas>
+          <div class="mut" style="font-size:11px;margin-top:4px">
+            <span style="color:#ff5c7a">■</span> Loss Treino &nbsp;
+            <span style="color:#ffb84d">■</span> Loss Teste &nbsp;
+            <span style="color:#38d996">■</span> Acurácia Treino (%) &nbsp;
+            <span style="color:#38bdf8">■</span> Acurácia Teste (%)
+          </div>
+        </div>
+        <div>
+          <div class="mut" style="margin-bottom:4px"><b>Embedding Neural (128 Dimensões) Aprendido em Tempo Real</b></div>
+          <canvas id="tr-emb" height="165"></canvas>
+          <div class="mut" style="font-size:11px;margin-top:4px">Vetor L2 normalizado ajustado a cada época pela camada recorrente BiGRU + projeção linear.</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="mut" style="margin-bottom:4px"><b>Log de Execução da Rede Neural em Tempo Real:</b></div>
+        <div class="logbox" id="train-log"></div>
+      </div>
+    </section>
+
+    <!-- ETAPA C: Replicar o áudio recém-treinado -->
+    <section class="card highlight-box hide" id="replicate-section">
+      <h2>Etapa 3 · 🎤 Sua Vez! Tente Replicar o Áudio que Você Acabou de Fornecer</h2>
+      <p class="mut" style="margin-top:0">
+        O modelo acabou de aprender as características do seu áudio! Escute a referência abaixo e grave (ou envie) sua tentativa de imitação para ver a avaliação completa da IA.
+      </p>
+      <div class="row" style="margin-bottom:10px">
+        <span class="tag" id="trained-badge">Referência treinada pronta</span>
+        <audio id="trained-ref-audio" controls></audio>
+      </div>
+      <div class="row">
+        <button class="btn rec" id="btn-rec-play" onclick="toggleRec('play')">🔴 Gravar Minha Tentativa de Replicação</button>
+        <span class="mut">ou envie um arquivo:</span>
+        <input type="file" id="user-file-play" accept="audio/*">
+        <span id="rec-time-play" class="mut"></span>
+      </div>
+      <canvas id="live-play" height="56" style="margin-top:10px"></canvas>
+      <div class="row" style="margin-top:10px">
+        <audio id="user-audio-play" controls class="hide"></audio>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ok" id="btn-go-play" onclick="compareCustom()" disabled>⚡ Avaliar Minha Replicação na Rede Treinada</button>
+        <span id="status-play" class="mut"></span>
+      </div>
+    </section>
+  </div>
+
+  <!-- ==================== PAINEL COMPARTILHADO DE RESULTADOS DA COMPARAÇÃO ==================== -->
+  <section id="result" class="hide" style="display:grid;gap:16px">
+    <div class="card">
+      <h2>Diagnóstico da IA — Resultado da Comparação Vocal</h2>
+      <div class="row" style="gap:24px">
+        <div><div class="mut">Nota Final</div><div class="score" id="score">0</div></div>
+        <div class="rank" id="rank">-</div>
+        <div style="flex:1;min-width:220px">
+          <b id="fb-title" style="font-size:17px"></b>
+          <div class="mut" id="fb-msg" style="margin:4px 0"></div>
+          <ul id="fb-tips" class="mut"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="card"><h2>Notas por Dimensão (Acertos vs. Erros)</h2><div class="bars" id="bars"></div></div>
+      <div class="card"><h2>Radar Vocal Multidimensional</h2><canvas id="radar" height="230"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>Comparação de MFCCs (Coeficientes Cepstrais de Frequência de Mel)</h2>
+      <div class="two">
+        <div><div class="mut">MFCCs — Áudio de Referência</div><canvas id="mfcc-ref" height="120"></canvas></div>
+        <div><div class="mut">MFCCs — Sua Tentativa</div><canvas id="mfcc-usr" height="120"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Comparação de Espectrogramas Log-Mel (O que a CRNN Convolucional enxerga)</h2>
+      <div class="two">
+        <div><div class="mut">Log-Mel — Referência</div><canvas id="spec-ref" height="135"></canvas></div>
+        <div><div class="mut">Log-Mel — Sua Tentativa</div><canvas id="spec-usr" height="135"></canvas></div>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="card">
+        <h2>Embeddings da Rede Siamesa (128 Dimensões)</h2>
+        <canvas id="emb" height="150"></canvas>
+        <p class="mut" id="emb-sim"></p>
+      </div>
+      <div class="card">
+        <h2>Alinhamento de Entonação (Pitch F0 via DTW)</h2>
+        <canvas id="pitch" height="150"></canvas>
+        <p class="mut"><span style="color:#7c5cff">■</span> Referência Original &nbsp; <span style="color:#38d996">■</span> Sua Voz</p>
+      </div>
+    </div>
+    <p class="mut" id="latency"></p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let mode = 'game', clips = [], selClip = null;
+let userBlobGame = null, customRefBlob = null, userBlobPlay = null, trainedCustomId = null;
+let recorder = null, recTarget = null, chunks = [], timer = null, stream = null, audioCtx = null, analyser = null, raf = null;
+
+function showTab(t){
+  mode = t;
+  $('tab-game').classList.toggle('on', t==='game');
+  $('tab-play').classList.toggle('on', t==='play');
+  $('view-game').classList.toggle('hide', t!=='game');
+  $('view-play').classList.toggle('hide', t!=='play');
+  $('result').classList.add('hide');
+}
+
+async function loadClips(){
+  try{
+    const r = await fetch('/api/clips');
+    const d = await r.json();
+    clips = (Array.isArray(d) ? d : (d.clips || [])).filter(c => !/^test_/.test(c.id||''));
+  }catch(e){
+    $('status-game').textContent = 'Erro ao carregar os 3 memes.';
+  }
+  const box = $('game-clips');
+  box.innerHTML = '';
+  clips.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'clip';
+    el.id = 'clip-' + c.id;
+    el.innerHTML = `<b></b><div class="mut" style="margin:4px 0"></div><span class="tag"></span>`;
+    el.querySelector('b').textContent = c.title;
+    el.querySelector('div').textContent = '“' + (c.phrase || '') + '”';
+    el.querySelector('span').textContent = (c.duration || 0) + 's';
+    el.onclick = () => selectClip(c.id);
+    box.appendChild(el);
+  });
+  if(clips.length > 0) selectClip(clips[0].id);
+}
+
+function selectClip(id){
+  selClip = clips.find(c => c.id === id);
+  if(!selClip) return;
+  document.querySelectorAll('.clip').forEach(e => e.classList.remove('sel'));
+  const el = $('clip-' + id);
+  if(el) el.classList.add('sel');
+  const a = $('ref-audio');
+  a.src = '/api/clips/audio/' + encodeURIComponent(selClip.file);
+  a.classList.remove('hide');
+  $('ref-phrase').textContent = 'Frase: “' + (selClip.phrase || '') + '”';
+  updateButtons();
+}
+
+$('user-file-game').onchange = e => {
+  const f = e.target.files[0];
+  if(f){
+    userBlobGame = f;
+    const a = $('user-audio-game');
+    a.src = URL.createObjectURL(f);
+    a.classList.remove('hide');
+    updateButtons();
+  }
+};
+
+$('custom-ref-file').onchange = e => {
+  const f = e.target.files[0];
+  if(f){
+    customRefBlob = f;
+    const a = $('custom-ref-preview');
+    a.src = URL.createObjectURL(f);
+    a.classList.remove('hide');
+    $('custom-ref-name').textContent = 'Arquivo selecionado: ' + f.name;
+    updateButtons();
+  }
+};
+
+$('user-file-play').onchange = e => {
+  const f = e.target.files[0];
+  if(f){
+    userBlobPlay = f;
+    const a = $('user-audio-play');
+    a.src = URL.createObjectURL(f);
+    a.classList.remove('hide');
+    updateButtons();
+  }
+};
+
+function updateButtons(){
+  $('btn-go-game').disabled = !(selClip && userBlobGame);
+  $('btn-train-live').disabled = !customRefBlob;
+  $('btn-go-play').disabled = !(trainedCustomId && userBlobPlay);
+}
+
+async function toggleRec(target){
+  if(recorder && recorder.state === 'recording'){
+    recorder.stop();
+    return;
+  }
+  recTarget = target;
+  const statusEl = target === 'game' ? $('status-game') : (target === 'ref' ? $('train-status') : $('status-play'));
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  }catch(e){
+    statusEl.innerHTML = '<span class="err">Microfone indisponível: ' + e.message + '</span>';
+    return;
+  }
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = () => {
+    clearInterval(timer);
+    cancelAnimationFrame(raf);
+    stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+    if(recTarget === 'game'){
+      $('btn-rec-game').textContent = '🔴 Gravar pelo Microfone';
+      $('rec-time-game').textContent = '';
+      userBlobGame = blob;
+      const a = $('user-audio-game');
+      a.src = URL.createObjectURL(blob);
+      a.classList.remove('hide');
+    } else if(recTarget === 'ref'){
+      $('btn-rec-ref').textContent = '🎙️ Gravar Áudio Base';
+      $('rec-time-ref').textContent = '';
+      customRefBlob = blob;
+      const a = $('custom-ref-preview');
+      a.src = URL.createObjectURL(blob);
+      a.classList.remove('hide');
+      $('custom-ref-name').textContent = 'Áudio gravado pelo microfone';
+    } else if(recTarget === 'play'){
+      $('btn-rec-play').textContent = '🔴 Gravar Minha Tentativa de Replicação';
+      $('rec-time-play').textContent = '';
+      userBlobPlay = blob;
+      const a = $('user-audio-play');
+      a.src = URL.createObjectURL(blob);
+      a.classList.remove('hide');
+    }
+    updateButtons();
+  };
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  audioCtx.createMediaStreamSource(stream).connect(analyser);
+  const canvasId = target === 'game' ? 'live-game' : (target === 'ref' ? 'live-ref' : 'live-play');
+  drawLive(canvasId);
+  recorder.start();
+
+  const btnEl = target === 'game' ? $('btn-rec-game') : (target === 'ref' ? $('btn-rec-ref') : $('btn-rec-play'));
+  const timeEl = target === 'game' ? $('rec-time-game') : (target === 'ref' ? $('rec-time-ref') : $('rec-time-play'));
+  btnEl.textContent = '⏹ Parar Gravação';
+  let s = 0;
+  timer = setInterval(() => { s++; timeEl.textContent = '⏺ Gravando: ' + s + 's'; }, 1000);
+}
+
+function drawLive(canvasId){
+  const c = $(canvasId), x = c.getContext('2d');
+  c.width = c.clientWidth || 600;
+  const d = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(d);
+  x.clearRect(0, 0, c.width, c.height);
+  x.strokeStyle = '#38d996';
+  x.lineWidth = 2;
+  x.beginPath();
+  d.forEach((v, i) => {
+    const px = i / d.length * c.width, py = v / 255 * c.height;
+    i ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.stroke();
+  raf = requestAnimationFrame(() => drawLive(canvasId));
+}
+
+function appendLog(msg){
+  const box = $('train-log');
+  const line = document.createElement('div');
+  const ts = new Date().toLocaleTimeString('pt-BR');
+  line.textContent = `[${ts}] ${msg}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function startLiveTraining(){
+  if(!customRefBlob) return;
+  $('btn-train-live').disabled = true;
+  $('replicate-section').classList.add('hide');
+  $('result').classList.add('hide');
+  $('train-monitor').classList.remove('hide');
+  $('train-log').innerHTML = '';
+  $('train-bar').style.width = '5%';
+  ['st-prep','st-feat','st-data','st-train'].forEach(id => $(id).className = 'step');
+  $('st-prep').className = 'step act';
+  $('train-status').textContent = 'Transmitindo áudio e iniciando treinamento ao vivo...';
+
+  const epochs = parseInt($('custom-epochs').value || '10', 10);
+  $('kpi-epoch').textContent = `0 / ${epochs}`;
+  $('kpi-loss').textContent = '-';
+  $('kpi-acc').textContent = '-';
+
+  const fd = new FormData();
+  fd.append('ref_file', customRefBlob, 'custom_ref.webm');
+  fd.append('title', $('custom-title').value || 'Meu Áudio Personalizado');
+  fd.append('phrase', $('custom-phrase').value || '');
+  fd.append('epochs', String(epochs));
+
+  const hist = {trainLoss: [], valLoss: [], trainAcc: [], valAcc: [], totalEpochs: epochs};
+
+  try{
+    const resp = await fetch('/api/playground/train-stream', {method: 'POST', body: fd});
+    if(!resp.ok){
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Falha ao iniciar treinamento');
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for(const line of lines){
+        if(!line.trim()) continue;
+        const ev = JSON.parse(line);
+        handleTrainEvent(ev, hist);
+      }
+    }
+    $('train-status').textContent = 'Treinamento finalizado!';
+  }catch(e){
+    $('train-status').innerHTML = '<span class="err">' + e.message + '</span>';
+    appendLog('ERRO: ' + e.message);
+  }
+  updateButtons();
+}
+
+function handleTrainEvent(ev, hist){
+  if(ev.message) appendLog(ev.message);
+  if(ev.stage === 'preprocess'){
+    $('st-prep').className = 'step on';
+    $('st-feat').className = 'step act';
+    $('train-bar').style.width = '18%';
+  } else if(ev.stage === 'features'){
+    $('st-feat').className = 'step on';
+    $('st-data').className = 'step act';
+    $('train-bar').style.width = '32%';
+    heat('tr-mfcc', ev.mfcc);
+    heat('tr-spec', ev.spectrogram);
+  } else if(ev.stage === 'dataset'){
+    $('st-data').className = 'step on';
+    $('st-train').className = 'step act';
+    $('train-bar').style.width = '42%';
+  } else if(ev.stage === 'epoch'){
+    const pct = 42 + Math.round((ev.epoch / ev.total_epochs) * 55);
+    $('train-bar').style.width = pct + '%';
+    $('kpi-epoch').textContent = `${ev.epoch} / ${ev.total_epochs}`;
+    $('kpi-loss').textContent = ev.train_loss.toFixed(4);
+    $('kpi-acc').textContent = `${ev.train_acc}% / ${ev.val_acc}%`;
+    hist.trainLoss.push(ev.train_loss);
+    hist.valLoss.push(ev.val_loss);
+    hist.trainAcc.push(ev.train_acc);
+    hist.valAcc.push(ev.val_acc);
+    drawLiveTrainChart(hist);
+    drawSingleEmb('tr-emb', ev.embedding);
+  } else if(ev.stage === 'complete'){
+    $('st-train').className = 'step on';
+    $('train-bar').style.width = '100%';
+    trainedCustomId = ev.custom_id;
+    $('trained-badge').textContent = `Referência ativa: ${ev.title} (${ev.duration_sec}s)`;
+    const a = $('trained-ref-audio');
+    a.src = ev.audio_url;
+    $('replicate-section').classList.remove('hide');
+    $('replicate-section').scrollIntoView({behavior: 'smooth'});
+    updateButtons();
+  }
+}
+
+function drawLiveTrainChart(hist){
+  const [c, x] = fit('tr-chart');
+  const N = hist.totalEpochs || 10;
+  const pad = 24 * devicePixelRatio;
+  const W = c.width - pad * 2, H = c.height - pad * 2;
+  x.strokeStyle = '#243056';
+  x.lineWidth = 1;
+  for(let k=0;k<=4;k++){
+    const py = pad + (H * k / 4);
+    x.beginPath(); x.moveTo(pad, py); x.lineTo(pad + W, py); x.stroke();
+  }
+  const maxLoss = Math.max(0.5, ...hist.trainLoss, ...hist.valLoss);
+  const plotLine = (arr, maxVal, col) => {
+    if(!arr.length) return;
+    x.strokeStyle = col;
+    x.lineWidth = 2.5 * devicePixelRatio;
+    x.beginPath();
+    arr.forEach((v, i) => {
+      const px = pad + (i / Math.max(1, N - 1)) * W;
+      const py = pad + H - (Math.min(maxVal, Math.max(0, v)) / maxVal) * H;
+      i ? x.lineTo(px, py) : x.moveTo(px, py);
+    });
+    x.stroke();
+  };
+  plotLine(hist.trainLoss, maxLoss, '#ff5c7a');
+  plotLine(hist.valLoss, maxLoss, '#ffb84d');
+  plotLine(hist.trainAcc, 100, '#38d996');
+  plotLine(hist.valAcc, 100, '#38bdf8');
+}
+
+function drawSingleEmb(canvasId, vec){
+  const [c, x] = fit(canvasId);
+  if(!vec || !vec.length) return;
+  const n = vec.length, w = c.width / n, mid = c.height / 2, sc = mid * 0.85;
+  x.strokeStyle = '#243056';
+  x.beginPath(); x.moveTo(0, mid); x.lineTo(c.width, mid); x.stroke();
+  for(let i=0;i<n;i++){
+    const val = vec[i];
+    x.fillStyle = val >= 0 ? 'rgba(56,217,150,.85)' : 'rgba(124,92,255,.85)';
+    const h = val * sc * 3.2;
+    x.fillRect(i * w, mid - h, Math.max(1, w * 0.78), h);
+  }
+}
+
+async function compareGame(){
+  if(!selClip || !userBlobGame) return;
+  const fd = new FormData();
+  fd.append('ref_id', selClip.id);
+  fd.append('user_file', userBlobGame, 'tentativa.webm');
+  if(selClip.phrase) fd.append('target_phrase', selClip.phrase);
+  $('btn-go-game').disabled = true;
+  $('status-game').textContent = 'Analisando sua voz na Rede Siamesa...';
+  try{
+    const r = await fetch('/api/compare', {method: 'POST', body: fd});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || 'Falha na comparação');
+    $('status-game').textContent = '';
+    renderComparison(d);
+  }catch(e){
+    $('status-game').innerHTML = '<span class="err">' + e.message + '</span>';
+  }
+  updateButtons();
+}
+
+async function compareCustom(){
+  if(!trainedCustomId || !userBlobPlay) return;
+  const fd = new FormData();
+  fd.append('ref_id', trainedCustomId);
+  fd.append('user_file', userBlobPlay, 'replicacao.webm');
+  const phrase = $('custom-phrase').value;
+  if(phrase) fd.append('target_phrase', phrase);
+  $('btn-go-play').disabled = true;
+  $('status-play').textContent = 'Avaliando sua replicação contra o áudio treinado...';
+  try{
+    const r = await fetch('/api/compare', {method: 'POST', body: fd});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || 'Falha na comparação');
+    $('status-play').textContent = '';
+    renderComparison(d);
+  }catch(e){
+    $('status-play').innerHTML = '<span class="err">' + e.message + '</span>';
+  }
+  updateButtons();
+}
+
+function renderComparison(d){
+  const res = $('result');
+  res.classList.remove('hide');
+  const v = d.visualizations || {};
+  heat('mfcc-ref', v.mfcc_ref || v.spectrogram_ref);
+  heat('mfcc-usr', v.mfcc_usr || v.spectrogram_usr);
+  heat('spec-ref', v.spectrogram_ref);
+  heat('spec-usr', v.spectrogram_usr);
+  drawEmb(v.embeddings);
+  drawPitch(v.pitch_curve);
+
+  const score = Math.round(d.total_score);
+  countUp($('score'), score);
+  const rk = $('rank');
+  rk.textContent = d.rank;
+  rk.style.color = score >= 80 ? 'var(--ok)' : score >= 60 ? 'var(--warn)' : 'var(--bad)';
+
+  const f = d.feedback || {};
+  $('fb-title').textContent = f.title || '';
+  $('fb-msg').textContent = f.message || '';
+  $('fb-tips').innerHTML = '';
+  (f.tips || []).forEach(t => {
+    const li = document.createElement('li');
+    li.textContent = t;
+    $('fb-tips').appendChild(li);
+  });
+
+  const names = {neural: 'Timbre (CRNN)', pitch: 'Entonação (DTW)', rhythm: 'Ritmo (RMS)', speech: 'Articulação'};
+  $('bars').innerHTML = '';
+  Object.entries(d.scores || {}).forEach(([k, val]) => {
+    const row = document.createElement('div');
+    row.className = 'bar';
+    row.innerHTML = `<span>${names[k] || k}</span><div><i></i></div><b>${Math.round(val)}%</b>`;
+    $('bars').appendChild(row);
+    setTimeout(() => row.querySelector('i').style.width = Math.max(2, val) + '%', 40);
+  });
+  drawRadar(v.radar);
+  $('latency').textContent = 'Inferência concluída em ' + d.latency_ms + ' ms';
+  res.scrollIntoView({behavior: 'smooth'});
+}
+
+function countUp(el, to){
+  let n = 0;
+  const t = setInterval(() => {
+    n = Math.min(to, n + (Math.ceil(to / 22) || 1));
+    el.textContent = n;
+    if(n >= to) clearInterval(t);
+  }, 22);
+}
+
+function fit(id){
+  const c = $(id);
+  const w = c.clientWidth || 420;
+  const h = parseInt(c.getAttribute('height') || '140', 10);
+  c.width = w * devicePixelRatio;
+  c.height = h * devicePixelRatio;
+  c.style.height = h + 'px';
+  return [c, c.getContext('2d')];
+}
+
+function heat(id, m){
+  const [c, x] = fit(id);
+  if(!m || !m.length) return;
+  const H = m.length, W = m[0].length, cw = c.width / W, ch = c.height / H;
+  for(let i=0;i<H;i++){
+    for(let j=0;j<W;j++){
+      const t = m[i][j];
+      x.fillStyle = `hsl(${260 - t * 220},88%,${10 + t * 54}%)`;
+      x.fillRect(j * cw, c.height - (i + 1) * ch, cw + 1, ch + 1);
+    }
+  }
+}
+
+function drawEmb(e){
+  const [c, x] = fit('emb');
+  if(!e) return;
+  const a = e.ref_vector, b = e.usr_vector, n = a.length, w = c.width / n, mid = c.height / 2, sc = mid * 0.9;
+  x.strokeStyle = '#243056';
+  x.beginPath(); x.moveTo(0, mid); x.lineTo(c.width, mid); x.stroke();
+  for(let i=0;i<n;i++){
+    x.fillStyle = 'rgba(124,92,255,.85)';
+    x.fillRect(i * w, mid - a[i] * sc * 3, w * 0.45, a[i] * sc * 3);
+    x.fillStyle = 'rgba(56,217,150,.85)';
+    x.fillRect(i * w + w * 0.5, mid - b[i] * sc * 3, w * 0.45, b[i] * sc * 3);
+  }
+  $('emb-sim').textContent = 'Similaridade de cosseno entre os embeddings (128D): ' + e.cosine_similarity;
+}
+
+function drawPitch(p){
+  const [c, x] = fit('pitch');
+  if(!p) return;
+  const all = [...p.pitch_ref_hz, ...p.pitch_usr_hz].filter(v => v > 0);
+  if(!all.length) return;
+  const mn = Math.min(...all) * 0.9, mx = Math.max(...all) * 1.1, n = p.time_seconds.length;
+  const line = (arr, col) => {
+    x.strokeStyle = col;
+    x.lineWidth = 2.8 * devicePixelRatio;
+    x.beginPath();
+    let st = false;
+    arr.forEach((v, i) => {
+      if(v <= 0){ st = false; return; }
+      const px = i / (n - 1) * c.width, py = c.height - (v - mn) / (mx - mn) * c.height;
+      st ? x.lineTo(px, py) : x.moveTo(px, py);
+      st = true;
+    });
+    x.stroke();
+  };
+  line(p.pitch_ref_hz, '#7c5cff');
+  line(p.pitch_usr_hz, '#38d996');
+}
+
+function drawRadar(r){
+  const [c, x] = fit('radar');
+  if(!r) return;
+  const keys = Object.keys(r), n = keys.length, cx = c.width / 2, cy = c.height / 2, R = Math.min(cx, cy) * 0.68;
+  x.strokeStyle = '#243056';
+  x.fillStyle = '#8f9bc7';
+  x.font = `${12 * devicePixelRatio}px sans-serif`;
+  x.textAlign = 'center';
+  for(let k=1;k<=4;k++){
+    x.beginPath();
+    keys.forEach((_, i) => {
+      const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+      const px = cx + Math.cos(a) * R * k / 4, py = cy + Math.sin(a) * R * k / 4;
+      i ? x.lineTo(px, py) : x.moveTo(px, py);
+    });
+    x.closePath();
+    x.stroke();
+  }
+  keys.forEach((k, i) => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+    x.fillText(k, cx + Math.cos(a) * (R + 22 * devicePixelRatio), cy + Math.sin(a) * (R + 16 * devicePixelRatio));
+  });
+  x.beginPath();
+  keys.forEach((k, i) => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / n, v = Math.max(4, r[k]) / 100;
+    const px = cx + Math.cos(a) * R * v, py = cy + Math.sin(a) * R * v;
+    i ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.closePath();
+  x.fillStyle = 'rgba(124,92,255,.35)';
+  x.fill();
+  x.strokeStyle = '#7c5cff';
+  x.lineWidth = 2 * devicePixelRatio;
+  x.stroke();
+}
+
+loadClips();
+</script>
+</body>
+</html>

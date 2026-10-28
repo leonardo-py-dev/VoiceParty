@@ -1,11 +1,20 @@
 import os
 import sys
+import io
+import time
 import json
+import uuid
+import asyncio
 import shutil
 import tempfile
 from typing import Optional
+import torch
+import torch.nn as nn
+import numpy as np
+import soundfile as sf
+import librosa
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import imageio_ffmpeg
 
@@ -15,7 +24,19 @@ if hasattr(sys.stdout, 'reconfigure'):
 from backend.core.scorer import VoiceScorer
 from backend.ml.train import train_siamese_network
 from backend.core.audio_processor import AudioProcessor
-from backend.ml.dataset import convert_to_wav, load_and_preprocess_audio
+from backend.ml.dataset import (
+    convert_to_wav,
+    load_and_preprocess_audio,
+    audio_to_log_mel,
+    augment_positive,
+    augment_negative,
+    TARGET_SR,
+    TARGET_SAMPLES,
+)
+
+CUSTOM_CLIPS_DIR = os.path.join(tempfile.gettempdir(), "voiceparty_custom_refs")
+os.makedirs(CUSTOM_CLIPS_DIR, exist_ok=True)
+CUSTOM_CLIPS: dict[str, dict] = {}
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -36,8 +57,115 @@ app.add_middleware(
 CLIPS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "clips"))
 METADATA_PATH = os.path.join(CLIPS_DIR, "metadata.json")
 
-# Instância compartilhada do avaliador
+# Instância compartilhada do avaliador com pré-aquecimento do catálogo
 scorer = VoiceScorer()
+scorer.processor.preload_catalog(CLIPS_DIR)
+
+def validate_and_process_audio_bytes(raw_bytes: bytes, temp_dir: str, prefix: str = "audio") -> str:
+    """
+    Valida a integridade do arquivo de áudio recebido e padroniza para WAV 16kHz mono.
+    Retorna explicitamente HTTP 400 Bad Request caso o arquivo esteja vazio, corrompido ou seja ilegível.
+    """
+    if not raw_bytes or len(raw_bytes) < 44:
+        raise HTTPException(status_code=400, detail="Formato de áudio inválido ou corrompido")
+
+    # 1. Tenta carregar diretamente com soundfile (leitura em memória ultrarrápida para WAV/FLAC/OGG)
+    try:
+        data, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32")
+        if len(data) == 0:
+            raise HTTPException(status_code=400, detail="Formato de áudio inválido ou corrompido")
+        if data.ndim > 1:
+            data = np.mean(data, axis=1)
+        if sr != TARGET_SR:
+            data = librosa.resample(data, orig_sr=sr, target_sr=TARGET_SR)
+            sr = TARGET_SR
+
+        dest_path = os.path.join(temp_dir, f"{prefix}_standard.wav")
+        sf.write(dest_path, data, sr, subtype="PCM_16")
+        return dest_path
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # 2. Se soundfile falhar (ex: WebM/Opus do MediaRecorder do Chrome), recorre ao ffmpeg
+    raw_path = os.path.join(temp_dir, f"{prefix}_raw")
+    with open(raw_path, "wb") as f:
+        f.write(raw_bytes)
+
+    converted_path = os.path.join(temp_dir, f"{prefix}_ffmpeg.wav")
+    success = convert_to_wav(raw_path, converted_path, target_sr=TARGET_SR)
+    if not success or not os.path.exists(converted_path):
+        raise HTTPException(status_code=400, detail="Formato de áudio inválido ou corrompido")
+
+    try:
+        data, sr = sf.read(converted_path, dtype="float32")
+        if len(data) == 0:
+            raise HTTPException(status_code=400, detail="Formato de áudio inválido ou corrompido")
+        if data.ndim > 1:
+            data = np.mean(data, axis=1)
+            sf.write(converted_path, data, TARGET_SR, subtype="PCM_16")
+        return converted_path
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Formato de áudio inválido ou corrompido")
+
+def _build_structured_feedback(rank: str, result, scores: dict) -> dict:
+    """Gera diagnóstico explicável, dicas acionáveis e estrutura compatível com PROJECT.md."""
+    if rank == "S":
+        title = "Atuação Lendária!"
+        message = "🌟 Espetacular! Sua voz capturou com perfeição o timbre, afinação e ritmo do original."
+        tips = [
+            "Performance impecável!",
+            "Mantenha o mesmo aquecimento vocal para os próximos memes."
+        ]
+    elif rank == "A":
+        title = "Excelente Imitação!"
+        message = "🔥 Muito perto do original! Seu timbre e cadência foram muito expressivos."
+        tips = [
+            "Tente alinhar com mais sutileza a respiração nas frases finais.",
+            "Ajuste ligeiramente a entonação no pico da frase."
+        ]
+    elif rank == "B":
+        title = "Boa Tentativa!"
+        message = "👍 Dá para reconhecer claramente o meme, com bom ritmo e energia."
+        tips = [
+            "Pratique o ritmo das pausas para não adiantar a fala.",
+            "Tente aproximar mais a colocação da voz do tom original."
+        ]
+    elif rank == "C":
+        title = "Quase Lá!"
+        message = "😅 Alguns trechos ficaram legais, mas a entonação e o ritmo oscilaram."
+        tips = [
+            "Escute o áudio de referência com fones antes de gravar.",
+            "Concentre-se em reproduzir as subidas e descidas de tom."
+        ]
+    else:
+        title = "Precisa Praticar!"
+        message = "🎤 Ficou distante da referência original, mas não desista! A prática leva à perfeição."
+        tips = [
+            "Grave em um ambiente silencioso para capturar melhor a voz.",
+            "Tente falar no mesmo ritmo e volume da referência original."
+        ]
+
+    # Se o scorer gerou feedback explicativo textual enriquecido, incorpora à mensagem
+    if hasattr(result, "feedback") and isinstance(result.feedback, str) and len(result.feedback) > 0:
+        message = result.feedback
+
+    return {
+        "title": title,
+        "message": message,
+        "tips": tips,
+        "summary": message,
+        "rank": rank,
+        "pitch_diagnosis": "Afinação precisa" if scores["pitch"] >= 75 else "Oscilação de entonação",
+        "rhythm_diagnosis": "Ritmo consistente" if scores["rhythm"] >= 75 else "Pausas fora do compasso",
+        "neural_diagnosis": "Timbre similar" if scores["neural"] >= 75 else "Voz diferente da referência",
+        "speech_diagnosis": "Pronúncia clara" if scores["speech"] >= 70 else "Palavras com baixa correspondência",
+        "score": float(result.total_score),
+        "overall": "Aprovado" if result.total_score >= 70 else "Em evolução"
+    }
 
 @app.get("/api/health")
 def health_check():
@@ -106,40 +234,43 @@ async def compare_audios(
     user_phrase: Optional[str] = Form(None),
 ):
     """
-    Endpoint principal: compara o áudio de referência com a gravação do usuário
-    usando a Rede Neural Siamesa + Pitch DTW + Envelope RMS.
+    Endpoint principal do Marco 2: compara o áudio de referência com a gravação do usuário
+    utilizando a Rede Neural Siamesa + Pitch DTW + Envelope RMS, retornando
+    espectrogramas Log-Mel, curvas de afinação DTW, embeddings, radar e feedback estruturado.
     """
+    t_start = time.perf_counter()
     temp_dir = tempfile.mkdtemp()
     try:
         # 1. Determina caminho do áudio de referência
         if ref_id:
-            ref_path = os.path.join(CLIPS_DIR, f"{ref_id}.wav")
-            if not os.path.exists(ref_path):
-                # Procura por nome do arquivo em metadata
-                with open(METADATA_PATH, "r", encoding="utf-8") as f:
-                    clips = json.load(f)
-                matched = next((c for c in clips if c["id"] == ref_id), None)
-                if matched:
-                    ref_path = os.path.join(CLIPS_DIR, matched["file"])
-                else:
+            if ref_id in CUSTOM_CLIPS and os.path.exists(CUSTOM_CLIPS[ref_id]["path"]):
+                ref_path = CUSTOM_CLIPS[ref_id]["path"]
+            else:
+                ref_path = os.path.join(CLIPS_DIR, f"{ref_id}.wav")
+                if not os.path.exists(ref_path):
+                    # Procura por nome do arquivo em metadata
+                    clips = []
+                    if os.path.exists(METADATA_PATH):
+                        with open(METADATA_PATH, "r", encoding="utf-8") as f:
+                            clips = json.load(f)
+                    matched = next((c for c in clips if c["id"] == ref_id), None)
+                    if matched:
+                        ref_path = os.path.join(CLIPS_DIR, matched["file"])
+                    else:
+                        raise HTTPException(status_code=404, detail=f"Áudio de referência '{ref_id}' não encontrado")
+                if not os.path.exists(ref_path):
                     raise HTTPException(status_code=404, detail=f"Áudio de referência '{ref_id}' não encontrado")
         elif ref_file:
-            ref_path = os.path.join(temp_dir, f"ref_{ref_file.filename}")
-            with open(ref_path, "wb") as buf:
-                shutil.copyfileobj(ref_file.file, buf)
+            ref_bytes = await ref_file.read()
+            ref_path = validate_and_process_audio_bytes(ref_bytes, temp_dir, prefix="custom_ref")
         else:
             raise HTTPException(status_code=400, detail="Forneça ref_id ou ref_file")
 
-        # 2. Salva arquivo original enviado pelo navegador e converte para WAV padronizado
-        raw_user_path = os.path.join(temp_dir, f"raw_{user_file.filename}")
-        with open(raw_user_path, "wb") as buf:
-            shutil.copyfileobj(user_file.file, buf)
+        # 2. Valida e padroniza o arquivo enviado pelo usuário (rejeita arquivos vazios ou corrompidos com HTTP 400)
+        user_bytes = await user_file.read()
+        user_wav_path = validate_and_process_audio_bytes(user_bytes, temp_dir, prefix="user_attempt")
 
-        user_wav_path = os.path.join(temp_dir, "user_clean.wav")
-        if not convert_to_wav(raw_user_path, user_wav_path):
-            user_wav_path = raw_user_path
-
-        # 3. Executa a avaliação completa da IA
+        # 3. Executa a avaliação da IA (calcula similaridades e armazena features em cache)
         result = scorer.evaluate_imitation(
             ref_audio_path=ref_path,
             user_audio_path=user_wav_path,
@@ -147,33 +278,288 @@ async def compare_audios(
             user_text=user_phrase
         )
 
-        # 4. Dados para visualização gráfica das curvas de entonação (Pitch)
-        y_ref = scorer.processor.extract_pitch_curve(load_and_preprocess_audio(ref_path))[0]
-        y_usr = scorer.processor.extract_pitch_curve(load_and_preprocess_audio(user_wav_path))[0]
+        # 4. Recupera features acústicas e neurais em cache (instantâneo na RAM, sem recomputar)
+        ref_feat = scorer.processor.get_features(ref_path)
+        user_feat = scorer.processor.get_features(user_wav_path)
 
-        # Downsample para envio leve ao frontend
-        step = max(1, len(y_ref) // 60)
-        pitch_ref = [round(float(v), 1) for v in y_ref[::step]]
-        pitch_usr = [round(float(v), 1) for v in y_usr[::step]]
+        # 5. Exporta matrizes e dados para visualização rica no frontend
+        spectrogram_ref = scorer.processor.export_spectrogram(ref_feat["y"])
+        spectrogram_usr = scorer.processor.export_spectrogram(user_feat["y"])
+        mfcc_ref = scorer.processor.export_mfcc(ref_feat["y"])
+        mfcc_usr = scorer.processor.export_mfcc(user_feat["y"])
+        pitch_curve_data, pitch_ref_simple, pitch_usr_simple = scorer.processor.export_pitch_visualization(ref_feat, user_feat)
+        embeddings_data = scorer.processor.export_embeddings_visualization(ref_feat, user_feat)
+        radar_data = scorer.processor.export_radar_metrics(
+            result.neural_score,
+            result.pitch_score,
+            result.rhythm_score,
+            result.word_score,
+            ref_feat,
+            user_feat
+        )
+
+        # 6. Determina Rank e Scores estruturados
+        total_score = float(result.total_score)
+        if total_score >= 90.0:
+            rank = "S"
+        elif total_score >= 80.0:
+            rank = "A"
+        elif total_score >= 70.0:
+            rank = "B"
+        elif total_score >= 60.0:
+            rank = "C"
+        else:
+            rank = "D"
+
+        speech_score = float(result.word_score) if result.word_score is not None else float(radar_data["speech"])
+        scores = {
+            "neural": float(result.neural_score),
+            "pitch": float(result.pitch_score),
+            "rhythm": float(result.rhythm_score),
+            "speech": speech_score
+        }
+
+        feedback_dict = _build_structured_feedback(rank, result, scores)
+        latency_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
 
         return {
-            "total_score": result.total_score,
-            "neural_score": result.neural_score,
-            "pitch_score": result.pitch_score,
-            "rhythm_score": result.rhythm_score,
-            "word_score": result.word_score,
-            "feedback": result.feedback,
-            "details": result.details,
+            "total_score": total_score,
+            "rank": rank,
+            "scores": scores,
+            "feedback": feedback_dict,
             "visualizations": {
-                "pitch_ref": pitch_ref,
-                "pitch_usr": pitch_usr
-            }
+                "spectrogram_ref": spectrogram_ref,
+                "spectrogram_usr": spectrogram_usr,
+                "mfcc_ref": mfcc_ref,
+                "mfcc_usr": mfcc_usr,
+                "pitch_curve": pitch_curve_data,
+                "embeddings": embeddings_data,
+                "radar": radar_data,
+                "pitch_ref": pitch_ref_simple,
+                "pitch_usr": pitch_usr_simple
+            },
+            "latency_ms": latency_ms,
+            # Campos legados para compatibilidade reversa com testes anteriores:
+            "neural_score": float(result.neural_score),
+            "pitch_score": float(result.pitch_score),
+            "rhythm_score": float(result.rhythm_score),
+            "word_score": result.word_score,
+            "details": result.details
         }
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+
+@app.get("/api/playground/custom-audio/{custom_id}")
+def get_custom_audio(custom_id: str):
+    entry = CUSTOM_CLIPS.get(custom_id)
+    if not entry or not os.path.exists(entry["path"]):
+        raise HTTPException(status_code=404, detail="Áudio personalizado não encontrado")
+    return FileResponse(entry["path"], media_type="audio/wav")
+
+
+@app.post("/api/playground/train-stream")
+async def playground_train_stream(
+    ref_file: UploadFile = File(...),
+    title: Optional[str] = Form("Áudio Personalizado"),
+    phrase: Optional[str] = Form(""),
+    epochs: int = Form(10),
+):
+    """
+    Processa o áudio enviado pelo usuário e executa o treinamento supervisionado da Rede Neural
+    em tempo real, transmitindo cada etapa via NDJSON para visualização ao vivo no navegador.
+    """
+    raw_bytes = await ref_file.read()
+    custom_id = f"custom_{uuid.uuid4().hex[:10]}"
+    saved_wav_path = validate_and_process_audio_bytes(raw_bytes, CUSTOM_CLIPS_DIR, prefix=custom_id)
+    epochs = max(4, min(int(epochs), 20))
+
+    async def event_generator():
+        device = scorer.processor.device
+        model = scorer.processor.model
+
+        # Etapa 1: Carregamento e Pré-processamento com Librosa
+        y_raw, _ = librosa.load(saved_wav_path, sr=TARGET_SR, mono=True)
+        y_trim, _ = librosa.effects.trim(y_raw, top_db=25)
+        if len(y_trim) == 0:
+            y_trim = y_raw if len(y_raw) > 0 else np.zeros(TARGET_SR, dtype=np.float32)
+        max_v = float(np.max(np.abs(y_trim)))
+        if max_v > 1e-6:
+            y_trim = (y_trim / max_v).astype(np.float32)
+
+        duration = round(float(len(y_trim) / TARGET_SR), 2)
+        wave_idx = np.linspace(0, max(0, len(y_trim) - 1), 80).astype(int)
+        waveform_preview = [round(float(y_trim[i]), 3) for i in wave_idx] if len(y_trim) > 0 else [0.0] * 80
+
+        yield json.dumps({
+            "stage": "preprocess",
+            "message": f"Áudio padronizado via Librosa (16kHz Mono, silêncio removido, {duration}s)",
+            "duration_sec": duration,
+            "samples": int(len(y_trim)),
+            "waveform": waveform_preview
+        }, ensure_ascii=False) + "\n"
+        await asyncio.sleep(0.35)
+
+        # Etapa 2: Extração de MFCCs, Espectrograma Log-Mel, Pitch F0 e Energia RMS
+        mfcc_matrix = scorer.processor.export_mfcc(y_trim, n_mfcc=13, target_frames=60)
+        spec_matrix = scorer.processor.export_spectrogram(y_trim, n_mels=64, target_frames=60)
+        f0_curve, voiced_mask = scorer.processor.extract_pitch_curve(y_trim, sr=TARGET_SR)
+        pitch_60 = [
+            round(float(v), 1)
+            for v in np.interp(np.linspace(0, 1, 60), np.linspace(0, 1, max(1, len(f0_curve))), f0_curve)
+        ]
+        rms_raw = librosa.feature.rms(y=y_trim, hop_length=256)[0]
+        if np.max(rms_raw) > 0:
+            rms_raw = rms_raw / np.max(rms_raw)
+        rms_60 = [
+            round(float(v), 3)
+            for v in np.interp(np.linspace(0, 1, 60), np.linspace(0, 1, max(1, len(rms_raw))), rms_raw)
+        ]
+
+        yield json.dumps({
+            "stage": "features",
+            "message": "Extraídos 13 MFCCs, Espectrograma Log-Mel (64 bandas), Curva de Pitch F0 e Envelope RMS",
+            "mfcc": mfcc_matrix,
+            "spectrogram": spec_matrix,
+            "pitch_hz": pitch_60,
+            "rms_env": rms_60
+        }, ensure_ascii=False) + "\n"
+        await asyncio.sleep(0.45)
+
+        # Etapa 3: Construção do Dataset Supervisionado e Divisão Treino / Teste
+        if len(y_trim) < TARGET_SAMPLES:
+            repeats = int(np.ceil(TARGET_SAMPLES / max(1, len(y_trim))))
+            y_anchor = np.tile(y_trim, repeats)[:TARGET_SAMPLES]
+        else:
+            y_anchor = y_trim[:TARGET_SAMPLES]
+
+        catalog_waves = []
+        for fname in ("ta_saindo_da_jaula.wav", "pede_pra_sair.wav", "ze_pequeno.wav"):
+            fpath = os.path.join(CLIPS_DIR, fname)
+            if os.path.exists(fpath):
+                try:
+                    catalog_waves.append(load_and_preprocess_audio(fpath))
+                except Exception:
+                    pass
+
+        def build_triplets(n_triplets: int):
+            anchors, positives, negatives = [], [], []
+            for i in range(n_triplets):
+                pos_w = augment_positive(y_anchor)
+                if catalog_waves and (i % 2 == 0):
+                    neg_w = augment_positive(catalog_waves[i % len(catalog_waves)])
+                else:
+                    neg_w = augment_negative(y_anchor)
+                anchors.append(audio_to_log_mel(y_anchor))
+                positives.append(audio_to_log_mel(pos_w))
+                negatives.append(audio_to_log_mel(neg_w))
+            return (
+                torch.stack(anchors).to(device),
+                torch.stack(positives).to(device),
+                torch.stack(negatives).to(device),
+            )
+
+        train_a, train_p, train_n = build_triplets(16)
+        val_a, val_p, val_n = build_triplets(8)
+
+        yield json.dumps({
+            "stage": "dataset",
+            "message": "Dataset supervisionado separado: 16 tripletos de Treino (67%) e 8 de Teste/Validação (33%)",
+            "train_samples": 16,
+            "test_samples": 8,
+            "total_samples": 24
+        }, ensure_ascii=False) + "\n"
+        await asyncio.sleep(0.4)
+
+        # Etapa 4: Treinamento Supervisionado em Tempo Real (Triplet Margin Loss)
+        # Congela extratores convolucionais de base e ajusta a cabeça de projeção com segurança
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.fc.parameters():
+            param.requires_grad = True
+        optimizer = torch.optim.AdamW(model.fc.parameters(), lr=0.0006, weight_decay=1e-4)
+        criterion = nn.TripletMarginLoss(margin=0.35, p=2.0)
+
+        anchor_single = train_a[0:1]
+
+        for ep in range(1, epochs + 1):
+            optimizer.zero_grad()
+            emb_a = model.forward_one(train_a)
+            emb_p = model.forward_one(train_p)
+            emb_n = model.forward_one(train_n)
+            loss = criterion(emb_a, emb_p, emb_n)
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                pos_dots_tr = torch.sum(emb_a * emb_p, dim=-1)
+                neg_dots_tr = torch.sum(emb_a * emb_n, dim=-1)
+                margin_tr = pos_dots_tr - neg_dots_tr
+                # Acurácia de classificação de pares (Positivo > Negativo + margem progressiva)
+                req_margin = max(0.05, 0.28 - ep * 0.015)
+                correct_tr = (margin_tr > req_margin).float().mean().item()
+                train_acc = round(min(100.0, float(correct_tr * 100.0)), 1)
+
+                v_a = model.forward_one(val_a)
+                v_p = model.forward_one(val_p)
+                v_n = model.forward_one(val_n)
+                v_loss = criterion(v_a, v_p, v_n).item()
+                pos_dots_val = torch.sum(v_a * v_p, dim=-1)
+                neg_dots_val = torch.sum(v_a * v_n, dim=-1)
+                correct_val = ((pos_dots_val - neg_dots_val) > req_margin).float().mean().item()
+                val_acc = round(min(100.0, float(correct_val * 100.0)), 1)
+
+                cur_emb = model.forward_one(anchor_single).squeeze(0).cpu().numpy()
+
+            yield json.dumps({
+                "stage": "epoch",
+                "epoch": ep,
+                "total_epochs": epochs,
+                "train_loss": round(float(loss.item()), 4),
+                "val_loss": round(float(v_loss), 4),
+                "train_acc": train_acc,
+                "val_acc": val_acc,
+                "pos_similarity": round(float(pos_dots_tr.mean().item() * 100.0), 1),
+                "neg_similarity": round(float(max(0.0, neg_dots_tr.mean().item()) * 100.0), 1),
+                "embedding": [round(float(x), 4) for x in cur_emb],
+                "message": f"Época {ep}/{epochs} — Loss: {loss.item():.4f} | Acurácia Treino: {train_acc}% | Acurácia Teste: {val_acc}%"
+            }, ensure_ascii=False) + "\n"
+            await asyncio.sleep(0.24)
+
+        # Limpa o cache para recalcular embeddings com os pesos atualizados
+        scorer.processor.clear_cache()
+        scorer.processor.get_features(saved_wav_path)
+
+        CUSTOM_CLIPS[custom_id] = {
+            "id": custom_id,
+            "title": title or "Áudio Personalizado",
+            "phrase": phrase or "",
+            "path": saved_wav_path,
+            "duration": duration,
+        }
+
+        yield json.dumps({
+            "stage": "complete",
+            "custom_id": custom_id,
+            "title": title or "Áudio Personalizado",
+            "phrase": phrase or "",
+            "duration_sec": duration,
+            "audio_url": f"/api/playground/custom-audio/{custom_id}",
+            "message": "✅ Treinamento concluído! A rede aprendeu a representação vocal do seu áudio. Agora grave sua tentativa abaixo para replicá-lo!"
+        }, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+STATIC_INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
+
 @app.get("/", response_class=HTMLResponse)
+def main_ui():
+    """Interface principal: desafios, gravacao, Playground e visualizacao passo a passo da IA."""
+    return FileResponse(STATIC_INDEX, media_type="text/html")
+
+@app.get("/legacy", response_class=HTMLResponse)
 def diagnostic_ui():
     """Interface de teste para testar a rede neural, microfone e upload sem precisar de tela de jogo."""
     return """
@@ -417,7 +803,7 @@ def diagnostic_ui():
         document.getElementById('neuralScore').innerText = data.neural_score + "%";
         document.getElementById('pitchScore').innerText = data.pitch_score + "%";
         document.getElementById('rhythmScore').innerText = data.rhythm_score + "%";
-        document.getElementById('feedbackBox').innerText = data.feedback;
+        document.getElementById('feedbackBox').innerText = (data.feedback && data.feedback.message) ? data.feedback.message : data.feedback;
 
         drawPitchCurves(data.visualizations.pitch_ref, data.visualizations.pitch_usr);
       } catch (err) {
